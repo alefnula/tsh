@@ -1,0 +1,23 @@
+# Run artifacts
+__pycache__/
+*.py[cod]
+
+
+# Experiments
+*.ipynb
+*.ipynb_checkpoints
+
+
+# Build artifacts
+tsh.egg-info
+build/
+dist/
+
+
+# Test artifacts
+.coverage
+
+
+# IDE Configuration
+.idea
+.vscode
