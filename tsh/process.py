@@ -18,7 +18,7 @@ class Process:
     """Process class."""
 
     def __str__(self):
-        return "Process(pid={0.pid}, command={0.command})".format(self)
+        return f"Process(pid={self.pid}, command={self.command})"
 
     __repr__ = __str__
 
@@ -36,6 +36,7 @@ class Process:
         command: List[str],
         stdout: IO = None,
         stderr: IO = None,
+        demux: bool = True,
         environment: Optional[Dict[str, str]] = None,
         working_dir: Optional[str] = None,
         encoding: str = consts.encoding,
@@ -53,6 +54,7 @@ class Process:
                 redirected.
             stderr: Path to the file to which standard error would be
                 redirected.
+            demux: Demux stdout and stderr. Default: True
             environment: Optional additional environment variables that will be
                 added to the subprocess environment or that will override
                 currently set environment variables.
@@ -65,6 +67,7 @@ class Process:
         self._wait_thread = None
         self._stdout = None if stdout is None else os.path.abspath(stdout)
         self._stderr = None if stderr is None else os.path.abspath(stderr)
+        self._demux = demux
         self._stdout_writer = None
         self._stderr_writer = None
         self._working_dir = working_dir or os.getcwd()
@@ -85,7 +88,7 @@ class Process:
         self._process.wait()
         if self._stdout_writer != subprocess.PIPE:
             self._stdout_writer.close()
-        if self._stderr_writer != subprocess.PIPE:
+        if self._stderr_writer != subprocess.PIPE and self._demux:
             self._stderr_writer.close()
 
     def start(self):
@@ -96,12 +99,16 @@ class Process:
             if self._stdout is None
             else io.open(self._stdout, "wb")
         )
+
         # Setup stderr
-        self._stderr_writer = (
-            subprocess.PIPE
-            if self._stderr is None
-            else io.open(self._stderr, "wb")
-        )
+        if self._demux:
+            self._stderr_writer = (
+                subprocess.PIPE
+                if self._stderr is None
+                else io.open(self._stderr, "wb")
+            )
+        else:
+            self._stderr_writer = self._stderr_writer
 
         try:
             self._process = subprocess.Popen(
@@ -121,12 +128,17 @@ class Process:
         )
         self._wait_thread.start()
 
-    def kill(self):
-        """Kill the process if it's running."""
+    def kill(self) -> Optional[bool]:
+        """Kill the process if it's running.
+
+        Returns:
+            True if the process is killed, False if an error happened or None
+            if the process is not running.
+        """
         try:
             if self._process is not None:
                 self._process.kill()
-                self.wait(1)
+                self.wait(0.5)
                 if self.is_running:
                     if self.pid == posix.getpgid(self.pid):
                         os.killpg(self.pid, signal.SIGKILL)
@@ -140,7 +152,7 @@ class Process:
         except OSError:
             return False
 
-    def wait(self, timeout=None):
+    def wait(self, timeout=None) -> bool:
         """Wait for the process to finish.
 
         It will wait for the process to finish running. If the timeout is
@@ -172,7 +184,7 @@ class Process:
             return True
 
     @property
-    def is_running(self):
+    def is_running(self) -> bool:
         """Indicate if the process is still running.
 
         Returns:
@@ -194,7 +206,7 @@ class Process:
         return None
 
     @property
-    def exit_code(self):
+    def exit_code(self) -> Optional[int]:
         """Exit code if the process has finished running.
 
         Returns:
@@ -237,15 +249,19 @@ class Process:
             written anything. If it hasn't or you already read all the data
             process wrote, it will return an empty string.
         """
-        if self._stderr is None:
-            return self._process.stderr.read().decode(self.encoding)
+        if self._demux:
+            if self._stderr is None:
+                return self._process.stderr.read().decode(self.encoding)
+            else:
+                with io.open(self._stderr, "r", encoding=self.encoding) as f:
+                    return f.read()
         else:
-            with io.open(self._stderr, "r", encoding=self.encoding) as f:
-                return f.read()
+            return ""
 
 
 def execute(
     command: Union[str, List[str]],
+    demux: bool = True,
     environment: dict = None,
     working_dir: str = None,
 ) -> Result:
@@ -253,6 +269,7 @@ def execute(
 
     Args:
         command: Command to execute.
+        demux: Demux stdout and stderr.
         environment: Environment variables.
         working_dir: Set the working dir.
 
@@ -260,7 +277,10 @@ def execute(
         Tuple (exit_code, stdout, stderr).
     """
     p = Process(
-        command=command, environment=environment, working_dir=working_dir
+        command=command,
+        demux=demux,
+        environment=environment,
+        working_dir=working_dir,
     )
     p.start()
     p.wait()
